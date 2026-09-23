@@ -1,0 +1,72 @@
+name: Buzzni Release
+
+# Fork-only workflow (never intended for upstream): builds this fork's patched
+# `dist/` and publishes it as a downloadable tarball attached to a GitHub
+# Release, so any machine can install with a plain
+#   npm i -g https://github.com/<owner>/codex-multi-auth/releases/download/<tag>/codex-multi-auth-<version>.tgz
+# without cloning or building locally. `npm i -g git+https://...` does not
+# work here: dist/ is gitignored and `prepare` runs husky, not a build, so a
+# git-URL install ships an empty package.
+#
+# Triggered only by pushing a tag matching v*-buzzni.*, so it never fires on
+# ordinary commits or upstream's own release tags.
+
+on:
+  push:
+    tags:
+      - "v*-buzzni.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build tarball and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack tarball
+        run: npm pack
+
+      - name: Smoke-test the packed tarball
+        # Installs into an isolated prefix (never the runner's global one) and
+        # runs the CLI entrypoint, the same check done manually before this
+        # workflow was written: a tarball that fails to install or run must
+        # not become a release asset.
+        run: |
+          mkdir -p "$RUNNER_TEMP/smoke-prefix"
+          npm install -g --prefix "$RUNNER_TEMP/smoke-prefix" ./codex-multi-auth-*.tgz
+          "$RUNNER_TEMP/smoke-prefix/bin/codex-multi-auth" --version
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          tarball="$(ls codex-multi-auth-*.tgz)"
+          gh release create "$tag" "$tarball" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "$tag" \
+            --generate-notes
